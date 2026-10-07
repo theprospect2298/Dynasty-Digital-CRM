@@ -1,0 +1,174 @@
+/**
+ * Dynasty Digital CRM - Firebase Cloud Function
+ * Incoming Leads Webhook Endpoint
+ *
+ * Deploy to Firebase with:
+ *   firebase deploy --only functions
+ */
+
+const { onRequest } = require('firebase-functions/v2/https');
+const admin = require('firebase-admin');
+
+// Initialize admin app if not already initialized
+if (!admin.apps.length) {
+  admin.initializeApp();
+}
+
+const db = admin.firestore();
+
+// Secret key to authenticate incoming leads (can be set via env var or secret)
+const LEADS_SECRET_KEY = process.env.LEADS_SECRET_KEY || 'dd_secret_leads_2026_cr';
+
+/**
+ * HTTP Cloud Function: incomingLeads
+ * Accepts POST requests from Zapier, Meta Lead Ads, and Website contact forms
+ */
+exports.incomingLeads = onRequest(
+  { cors: true, maxInstances: 10 },
+  async (req, res) => {
+    // Handle OPTIONS preflight
+    if (req.method === 'OPTIONS') {
+      res.set('Access-Control-Allow-Methods', 'GET, POST');
+      res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key');
+      res.status(204).send('');
+      return;
+    }
+
+    // Health check / GET documentation
+    if (req.method === 'GET') {
+      res.status(200).json({
+        status: 'active',
+        service: 'Dynasty Digital CRM Incoming Leads Firebase Function',
+        requiredHeader: 'x-api-key: <YOUR_SECRET_KEY>',
+        expectedFields: ['name', 'email', 'phone', 'business', 'businessType', 'source', 'message']
+      });
+      return;
+    }
+
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method Not Allowed. Use POST.' });
+      return;
+    }
+
+    try {
+      // 1. Verify Secret Key
+      const authHeader = req.headers.authorization || '';
+      const bearer = authHeader.startsWith('Bearer ') ? authHeader.substring(7).trim() : '';
+      const xApiKey = req.headers['x-api-key'] || req.headers['x-secret-key'] || '';
+      const bodyKey = req.body?.secretKey || req.body?.apiKey || '';
+      const providedKey = (bearer || xApiKey || bodyKey || req.query.secretKey || '').trim();
+
+      if (!providedKey || providedKey !== LEADS_SECRET_KEY) {
+        res.status(401).json({
+          error: 'Unauthorized',
+          message: 'Invalid or missing secret key. Pass x-api-key header or secretKey in body.'
+        });
+        return;
+      }
+
+      // 2. Extract Lead Information
+      const b = req.body || {};
+      const contactName = (
+        b.name ||
+        b.contactName ||
+        b.fullName ||
+        (b.first_name ? `${b.first_name} ${b.last_name || ''}`.trim() : '') ||
+        'New Inbound Lead'
+      ).trim();
+
+      const businessName = (
+        b.business ||
+        b.businessName ||
+        b.company ||
+        `${contactName}'s Business`
+      ).trim();
+
+      const email = (b.email || b.email_address || '').trim();
+      const phone = (b.phone || b.phone_number || '').trim();
+      const rawType = (b.businessType || b.business_type || b.industry || 'Other').trim();
+      const rawSource = (b.source || b.leadSource || 'Website Form').trim();
+      const message = (b.message || b.notes || b.comments || '').trim();
+
+      const isMeta =
+        rawSource.toLowerCase().includes('meta') ||
+        rawSource.toLowerCase().includes('facebook') ||
+        rawSource.toLowerCase().includes('instagram');
+      const normalizedSource = isMeta ? 'Meta Ads' : rawSource || 'Website Form';
+
+      // 3. Generate Timestamps & Unique IDs
+      const now = new Date();
+      const nowIso = now.toISOString();
+      const todayStr = nowIso.split('T')[0];
+      const randSuffix = Math.random().toString(36).substring(2, 7);
+
+      const clientId = `cli_lead_${Date.now()}_${randSuffix}`;
+      const taskId = `tsk_followup_${Date.now()}_${randSuffix}`;
+      const activityId = `act_lead_${Date.now()}_${randSuffix}`;
+
+      // 4. Batch write to Firestore
+      const batch = db.batch();
+
+      // Client Record (Status: Lead, uncontacted)
+      const clientRef = db.collection('clients').doc(clientId);
+      batch.set(clientRef, {
+        id: clientId,
+        businessName,
+        contactName,
+        email,
+        phone,
+        website: '',
+        address: '',
+        city: 'Fort Lauderdale, FL',
+        industry: rawType,
+        leadSource: normalizedSource,
+        status: 'Lead',
+        tags: ['Inbound Lead', normalizedSource],
+        dateAdded: todayStr,
+        notes: message ? `Lead inquiry: ${message}` : `Inbound lead from ${normalizedSource}.`,
+        accessInfo: '',
+        lastActivityDate: nowIso,
+        leadContacted: false,
+        sourceMessage: message,
+      });
+
+      // Urgent 5-Minute Follow-up Task
+      const taskRef = db.collection('tasks').doc(taskId);
+      batch.set(taskRef, {
+        id: taskId,
+        clientId,
+        title: `⚡ Follow up within 5 minutes — ${contactName} (${businessName})`,
+        dueDate: todayStr,
+        priority: 'High',
+        done: false,
+        type: 'Follow-up',
+        autoGenerated: true,
+        createdAt: nowIso,
+      });
+
+      // Activity Log Entry
+      const activityRef = db.collection('activities').doc(activityId);
+      batch.set(activityRef, {
+        id: activityId,
+        clientId,
+        type: 'lead_received',
+        title: `Incoming Lead via ${normalizedSource}`,
+        description: `${contactName} (${businessName}) submitted a lead inquiry. Phone: ${phone || 'N/A'} | Email: ${email || 'N/A'}${message ? `. Message: "${message}"` : ''}`,
+        timestamp: nowIso,
+      });
+
+      await batch.commit();
+
+      res.status(201).json({
+        success: true,
+        message: 'Lead created successfully with 5-minute follow-up task',
+        leadId: clientId,
+        businessName,
+        contactName,
+        taskId,
+      });
+    } catch (err) {
+      console.error('Error handling lead:', err);
+      res.status(500).json({ error: 'Internal Error', message: err.message });
+    }
+  }
+);

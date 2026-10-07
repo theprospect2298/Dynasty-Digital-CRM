@@ -1,0 +1,6 @@
+{
+  "name": "Dynasty Digital CRM",
+  "description": "Production CRM for Dynasty Digital web design and marketing agency, managing leads, retainers, contract terms, billing, and projects.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

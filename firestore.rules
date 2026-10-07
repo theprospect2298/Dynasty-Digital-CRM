@@ -1,0 +1,251 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default-deny global safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ==========================================
+    // SECURITY PRIMITIVES & IDENTITY HELPERS
+    // ==========================================
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Single allowed user: locked strictly to Carlos Ventura's verified Google account
+    function isAllowedOwner() {
+      return isSignedIn() &&
+        request.auth.token.email == 'carlosventura.fx@gmail.com' &&
+        request.auth.token.email_verified == true;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // ==========================================
+    // ENTITY VALIDATION BLUEPRINTS
+    // ==========================================
+
+    function isValidClient(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.businessName is string && data.businessName.size() > 0 && data.businessName.size() <= 200 &&
+             data.status is string && data.status.size() <= 50;
+    }
+
+    function isValidService(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.clientId is string && data.clientId.size() <= 128 &&
+             data.customName is string && data.customName.size() <= 200 &&
+             data.price is number && data.price >= 0 &&
+             data.billingType is string && (data.billingType == 'one-time' || data.billingType == 'monthly') &&
+             data.status is string && data.status.size() <= 50;
+    }
+
+    function isValidPayment(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.clientId is string && data.clientId.size() <= 128 &&
+             data.amount is number && data.amount > 0 &&
+             data.date is string && data.date.size() <= 50 &&
+             data.status is string && data.status.size() <= 50;
+    }
+
+    function isValidProject(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.clientId is string && data.clientId.size() <= 128 &&
+             data.name is string && data.name.size() <= 200 &&
+             data.stage is string && data.stage.size() <= 50;
+    }
+
+    function isValidTask(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.title is string && data.title.size() <= 300 &&
+             data.done is bool;
+    }
+
+    function isValidActivity(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.clientId is string && data.clientId.size() <= 128 &&
+             data.type is string && data.type.size() <= 50 &&
+             data.title is string && data.title.size() <= 200;
+    }
+
+    function isValidCatalogItem(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.name is string && data.name.size() <= 200 &&
+             data.category is string && data.category.size() <= 100 &&
+             data.defaultPrice is number && data.defaultPrice >= 0;
+    }
+
+    function isValidSettings(data) {
+      return data.agencyName is string && data.agencyName.size() <= 100;
+    }
+
+    function isValidExpense(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.vendor is string && data.vendor.size() > 0 && data.vendor.size() <= 200 &&
+             data.amount is number && data.amount > 0 &&
+             data.category is string && data.category.size() <= 100 &&
+             data.recurring is string && (data.recurring == 'monthly' || data.recurring == 'yearly' || data.recurring == 'one-time');
+    }
+
+    function isValidInvoice(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.invoiceNumber is string && data.invoiceNumber.size() <= 64 &&
+             data.clientId is string && data.clientId.size() <= 128 &&
+             data.total is number && data.total >= 0 &&
+             data.status is string && (data.status == 'Draft' || data.status == 'Sent' || data.status == 'Paid' || data.status == 'Overdue');
+    }
+
+    function isValidChecklist(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.clientId is string && data.clientId.size() <= 128 &&
+             data.title is string && data.title.size() <= 200;
+    }
+
+    function isValidChecklistTemplate(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.name is string && data.name.size() <= 200;
+    }
+
+    function isValidPerformanceEntry(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.clientId is string && data.clientId.size() <= 128 &&
+             data.month is string && data.month.size() <= 20 &&
+             data.adSpend is number && data.adSpend >= 0 &&
+             data.leads is number && data.leads >= 0;
+    }
+
+    function isValidClientWebsite(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.clientId is string && data.clientId.size() <= 128 &&
+             data.domain is string && data.domain.size() > 0 && data.domain.size() <= 200;
+    }
+
+    // ==========================================
+    // COLLECTION RULES
+    // ==========================================
+
+    match /clients/{clientId} {
+      allow read: if isAllowedOwner();
+      allow create: if (isAllowedOwner() && isValidId(clientId) && isValidClient(incoming())) ||
+                       (isValidId(clientId) && isValidClient(incoming()) && incoming().status == 'Lead');
+      allow update: if isAllowedOwner() && isValidId(clientId) && isValidClient(incoming());
+      allow delete: if isAllowedOwner() && isValidId(clientId);
+    }
+
+    match /clientServices/{serviceId} {
+      allow read: if isAllowedOwner();
+      allow create: if isAllowedOwner() && isValidId(serviceId) && isValidService(incoming());
+      allow update: if isAllowedOwner() && isValidId(serviceId) && isValidService(incoming());
+      allow delete: if isAllowedOwner() && isValidId(serviceId);
+    }
+
+    match /payments/{paymentId} {
+      allow read: if isAllowedOwner();
+      allow create: if isAllowedOwner() && isValidId(paymentId) && isValidPayment(incoming());
+      allow update: if isAllowedOwner() && isValidId(paymentId) && isValidPayment(incoming());
+      allow delete: if isAllowedOwner() && isValidId(paymentId);
+    }
+
+    match /projects/{projectId} {
+      allow read: if isAllowedOwner();
+      allow create: if isAllowedOwner() && isValidId(projectId) && isValidProject(incoming());
+      allow update: if isAllowedOwner() && isValidId(projectId) && isValidProject(incoming());
+      allow delete: if isAllowedOwner() && isValidId(projectId);
+    }
+
+    match /tasks/{taskId} {
+      allow read: if isAllowedOwner();
+      allow create: if (isAllowedOwner() && isValidId(taskId) && isValidTask(incoming())) ||
+                       (isValidId(taskId) && isValidTask(incoming()) && incoming().type == 'Follow-up');
+      allow update: if isAllowedOwner() && isValidId(taskId) && isValidTask(incoming());
+      allow delete: if isAllowedOwner() && isValidId(taskId);
+    }
+
+    match /activities/{activityId} {
+      allow read: if isAllowedOwner();
+      allow create: if (isAllowedOwner() && isValidId(activityId) && isValidActivity(incoming())) ||
+                       (isValidId(activityId) && isValidActivity(incoming()));
+      allow update: if isAllowedOwner() && isValidId(activityId) && isValidActivity(incoming());
+      allow delete: if isAllowedOwner() && isValidId(activityId);
+    }
+
+    match /catalog/{catalogId} {
+      allow read: if isAllowedOwner();
+      allow create: if isAllowedOwner() && isValidId(catalogId) && isValidCatalogItem(incoming());
+      allow update: if isAllowedOwner() && isValidId(catalogId) && isValidCatalogItem(incoming());
+      allow delete: if isAllowedOwner() && isValidId(catalogId);
+    }
+
+    match /settings/{settingId} {
+      allow read: if isAllowedOwner();
+      allow create: if isAllowedOwner() && isValidId(settingId) && isValidSettings(incoming());
+      allow update: if isAllowedOwner() && isValidId(settingId) && isValidSettings(incoming());
+      allow delete: if isAllowedOwner() && isValidId(settingId);
+    }
+
+    match /allowed_users/{userId} {
+      allow read: if isAllowedOwner();
+      allow write: if isAllowedOwner() && isValidId(userId);
+    }
+
+    match /expenses/{expenseId} {
+      allow read: if isAllowedOwner();
+      allow create: if isAllowedOwner() && isValidId(expenseId) && isValidExpense(incoming());
+      allow update: if isAllowedOwner() && isValidId(expenseId) && isValidExpense(incoming());
+      allow delete: if isAllowedOwner() && isValidId(expenseId);
+    }
+
+    match /invoices/{invoiceId} {
+      allow read: if isAllowedOwner();
+      allow create: if isAllowedOwner() && isValidId(invoiceId) && isValidInvoice(incoming());
+      allow update: if isAllowedOwner() && isValidId(invoiceId) && isValidInvoice(incoming());
+      allow delete: if isAllowedOwner() && isValidId(invoiceId);
+    }
+
+    match /checklists/{checklistId} {
+      allow read: if isAllowedOwner();
+      allow create: if isAllowedOwner() && isValidId(checklistId) && isValidChecklist(incoming());
+      allow update: if isAllowedOwner() && isValidId(checklistId) && isValidChecklist(incoming());
+      allow delete: if isAllowedOwner() && isValidId(checklistId);
+    }
+
+    match /checklistTemplates/{templateId} {
+      allow read: if isAllowedOwner();
+      allow create: if isAllowedOwner() && isValidId(templateId) && isValidChecklistTemplate(incoming());
+      allow update: if isAllowedOwner() && isValidId(templateId) && isValidChecklistTemplate(incoming());
+      allow delete: if isAllowedOwner() && isValidId(templateId);
+    }
+
+    match /performanceEntries/{entryId} {
+      allow read: if isAllowedOwner();
+      allow create: if isAllowedOwner() && isValidId(entryId) && isValidPerformanceEntry(incoming());
+      allow update: if isAllowedOwner() && isValidId(entryId) && isValidPerformanceEntry(incoming());
+      allow delete: if isAllowedOwner() && isValidId(entryId);
+    }
+
+    match /websites/{websiteId} {
+      allow read: if isAllowedOwner();
+      allow create: if isAllowedOwner() && isValidId(websiteId) && isValidClientWebsite(incoming());
+      allow update: if isAllowedOwner() && isValidId(websiteId) && isValidClientWebsite(incoming());
+      allow delete: if isAllowedOwner() && isValidId(websiteId);
+    }
+
+    // Connection test document
+    match /test/{docId} {
+      allow read: if isSignedIn();
+    }
+  }
+}
